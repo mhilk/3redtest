@@ -1,3 +1,5 @@
 /cmake-build-debug/
 /cmake-build-debug-wsl/
 /cmake-build-release-wsl/
+/cpp/cmake-build-debug-wsl/
+/output/
