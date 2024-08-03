@@ -12,7 +12,7 @@
 template<int levels, char prefix>
 void printLevelHeader(std::ofstream &output) {
     for (int i = 0; i < levels; ++i) {
-        output <<',' <<prefix<< 'p' << i << ',' <<prefix<< 'q' << i;
+        output << ',' << prefix << 'p' << i << ',' << prefix << 'q' << i;
     }
 }
 
@@ -24,7 +24,6 @@ int main(int argc, char *argv[]) {
     OrderUpdate update{};
     Book book{};
     std::getline(input, line);
-    std::cout << line << std::endl;
     assert(line == "timestamp,side,action,id,price,quantity");
     constexpr int printedLevels = 5;
     output << "timestamp,price,side";
@@ -42,14 +41,12 @@ int main(int argc, char *argv[]) {
                 break;
             }
             update.read(line);
-            // std::cout << update;
             book.handleUpdate(update);
             book.printCsv<printedLevels>(output, update);
             output << "\n";
         } else {
             throw std::runtime_error("fail");
         }
-
     }
     input.close();
     output.close();

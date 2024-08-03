@@ -63,7 +63,7 @@ struct OrderUpdate {
     long price;
     long quantity;
 
-    void read_and_check_comma(std::istringstream &in) {
+    static void read_and_check_comma(std::istringstream &in) {
         char comma;
         in >> comma;
         assert(comma == ',');

@@ -4,10 +4,6 @@
 
 #ifndef BOOKLEVEL_H
 #define BOOKLEVEL_H
-#include <vector>
-
-#include "BookOrder.h"
-
 
 class BookLevel {
 public:
