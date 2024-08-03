@@ -94,9 +94,9 @@ private:
         BookSide<comp> &book_side = get_side<side, comp>();
         auto book_order = orders.find(order_update.id);
         assert(book_order != orders.end());
-        orders.erase(book_order);
         BookOrder *existing_order = book_order->second;
         book_side.removeOrder(existing_order->getPrice(), order_update.timestamp, existing_order->getQty());
+        orders.erase(book_order);
     }
 
     template<Side side, typename comp>
@@ -113,6 +113,7 @@ private:
             book_side.removeOrder(existing_order->getPrice(), order_update.timestamp, existing_order->getQty());
             book_side.addOrder(order_update.price, order_update.timestamp, order_update.quantity);
         }
+        existing_order->update(order_update.price, order_update.quantity);
     }
 };
 

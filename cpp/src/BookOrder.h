@@ -35,6 +35,28 @@ public:
         return side;
     }
 
+    void update(long price, long quantity) {
+        long priceChange = price - this->price;
+        if (side == Side::Sell) {
+            priceChange = -priceChange;
+        }
+        if (priceChange == 0) {
+            if (quantity < qty) {
+                lastUpdate = UpdateType::QtyDown;
+            } else {
+                lastUpdate = UpdateType::QtyUp;
+            }
+        } else {
+            if (priceChange < 0) {
+                lastUpdate = UpdateType::PriceOut;
+            } else {
+                lastUpdate = UpdateType::PriceIn;
+            }
+        }
+        this->price = price;
+        this->qty = quantity;
+    }
+
 private:
     const long entryTime;
     long price;

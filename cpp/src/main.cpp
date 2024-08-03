@@ -28,8 +28,8 @@ int main(int argc, char *argv[]) {
     assert(line == "timestamp,side,action,id,price,quantity");
     constexpr int printedLevels = 5;
     output << "timestamp,price,side";
-    printLevelHeader<5, 'b'>(output);
-    printLevelHeader<5, 'a'>(output);
+    printLevelHeader<printedLevels, 'b'>(output);
+    printLevelHeader<printedLevels, 'a'>(output);
     output << '\n';
 
     while (input.is_open()) {
@@ -44,7 +44,7 @@ int main(int argc, char *argv[]) {
             update.read(line);
             // std::cout << update;
             book.handleUpdate(update);
-            book.printCsv<5>(output, update);
+            book.printCsv<printedLevels>(output, update);
             output << "\n";
         } else {
             throw std::runtime_error("fail");
