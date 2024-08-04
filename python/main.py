@@ -4,6 +4,7 @@ import sys
 
 import numpy as np
 import pandas as pd
+from sklearn import linear_model
 
 
 class ColumnProvider(abc.ABC):
@@ -119,8 +120,7 @@ class TargetsV1(TargetExtractor):
         weighted_mid = tob_bid_price + (spread * (tob_bid_qty.astype(np.float32) / (tob_bid_qty + tob_ask_qty)))
         weighted_mid_change = weighted_mid[TargetsV1.OFFSET:] - weighted_mid[:-TargetsV1.OFFSET]
         raw_df[TargetsV1.WEIGHTED_MID_DIFF_5_ROWS] = np.nan
-        raw_df.iloc[:-TargetsV1.OFFSET,
-        raw_df.columns.get_loc(TargetsV1.WEIGHTED_MID_DIFF_5_ROWS)] = weighted_mid_change
+        raw_df.iloc[:-TargetsV1.OFFSET, raw_df.columns.get_loc(TargetsV1.WEIGHTED_MID_DIFF_5_ROWS)] = weighted_mid_change
         raw_df.loc[(tob_bid_qty == 0) | (tob_ask_qty == 0), TargetsV1.WEIGHTED_MID_DIFF_5_ROWS] = np.nan
         return raw_df
 
@@ -161,8 +161,8 @@ class LassoModel(Model):
     def update(self, dw, db):
         assert np.all(np.isfinite(dw)), "nan weight updates"
         assert np.all(np.isfinite(db)), "nan intercept updates"
-        self.weights -= dw
-        self.b -= db
+        self.weights = dw
+        self.b = db
 
 
 class Regressor(abc.ABC):
@@ -182,12 +182,16 @@ class LassoRegressor(Regressor):
         for i in range(self.iterations):
             Y_pred = model.predict(X)
             # calculate gradients
-            dw_raw = X.T.dot(Y - Y_pred)
-            dW = (-2 * dw_raw) / n_samples + self.l1_penalty * np.sign(model.weights)
-            db = -2 * np.sum(Y - Y_pred) / n_samples
+            Y_resid = Y - Y_pred
+            dw_raw = X.T.dot(Y_resid)
+            new_weights = model.weights - (self.learning_rate * (-2 * dw_raw) / n_samples)
+            l1_step = self.learning_rate * self.l1_penalty
+            clipped_weights = np.maximum(np.minimum(new_weights, l1_step), -l1_step)
+            new_weights -= clipped_weights
+            new_intercept = model.b - self.learning_rate * (-2 * np.sum(Y_resid) / n_samples)
 
             # update weights
-            model.update(self.learning_rate * dW, self.learning_rate * db)
+            model.update(new_weights, new_intercept)
 
         return model
 
@@ -264,7 +268,8 @@ def main():
 
     train_df = pd.concat(train_dfs)
     test_df = pd.concat(test_dfs)
-    regression = LassoRegressor(0.01, 1000, 10)
+    lasso = linear_model.Lasso(alpha=0.1)
+    regression = LassoRegressor(0.01, 1000, 0.1)
 
     target_range = targetExtractor.valid_range()
     feature_range = featureExtractor.valid_range()
@@ -276,12 +281,22 @@ def main():
     train_features, train_target = prepare_features_and_target(train_df, featureExtractor, targetExtractor)
     test_features, test_target = prepare_features_and_target(test_df, featureExtractor, targetExtractor)
     # features, target = prepare_features_and_target(train_df, featureExtractor, targetExtractor)
+    lasso.fit(train_features, train_target)
+    print(lasso.intercept_)
+    print(lasso.coef_)
+    lass_pred_train = lasso.predict(train_features)
+    lass_pred_test = lasso.predict(test_features)
+    print_error(train_target, lass_pred_train)
+    print_error(test_target, lass_pred_test)
+
     model = regression.fit(train_features, train_target)
+    print(model.b)
+    print(model.weights)
+
     yhat_train = model.predict(train_features)
     print_error(train_target, yhat_train)
     yhat_test = model.predict(test_features)
     print_error(test_target, yhat_test)
-    print(model.weights)
 
 
 def prep_date(date, featureExtractor, input_dir, targetExtractor, subsampler):
