@@ -43,11 +43,26 @@ class ColumnSelectingExtractor(FeatureExtractor, TargetExtractor):
         return None, None
 
 
+def weighted_price_to_qty(average_tob_size, max_depth, raw_df, prefix):
+    remaining_needed_size = average_tob_size.values
+    weighted_price = np.zeros_like(average_tob_size, dtype=np.float64)
+    for i in range(max_depth):
+        level_qty = raw_df[prefix + 'q' + str(i)].values
+        level_px = raw_df[prefix + 'p' + str(i)].values
+        level_size = np.clip(level_qty, 0, remaining_needed_size)
+        weighted_price += level_size * level_px
+        remaining_needed_size = np.clip(remaining_needed_size - level_size, 0, np.inf)
+    return weighted_price / (average_tob_size - remaining_needed_size)
+
+
 class FeaturesV1(FeatureExtractor):
     BOOK_PRESSURE = "book_pressure"
     BOOK_PRESSURE_CHANGE_1_ROW = "book_pressure_change_1_row"
     QTY_IMBALANCE = "qty_imbalance"
     SPREAD = "spread"
+    AVERAGE_TOB_SIZE = "average_tob_size"
+    DEEP_BOOK_MID_DIFF = 'deep_book_mid_diff'
+    MIN_1_PRICE_EMA = 'min_1_price_ema'
 
     def __init__(self):
         pass
@@ -65,16 +80,30 @@ class FeaturesV1(FeatureExtractor):
         raw_df.iloc[1:, raw_df.columns.get_loc(FeaturesV1.BOOK_PRESSURE_CHANGE_1_ROW)] = (bp[1:] - bp[:-1])
         raw_df[FeaturesV1.QTY_IMBALANCE] = (
                 (tob_bid_qty - tob_ask_qty).astype(np.float32) / np.sqrt(tob_bid_qty + tob_ask_qty))
+        double_average_tob_size = 2 * pd.Series(tob_bid_qty + tob_ask_qty).ewm(com=50).mean()
+        weighted_bid_price = weighted_price_to_qty(double_average_tob_size, 5, raw_df, 'b')
+        weighted_ask_price = weighted_price_to_qty(double_average_tob_size, 5, raw_df, 'a')
+        deep_book_mid = (weighted_bid_price + weighted_ask_price) / 2
+        mid_price = (tob_ask_price + tob_bid_price) / 2
+        raw_df[FeaturesV1.DEEP_BOOK_MID_DIFF] = deep_book_mid - mid_price
+        times = (raw_df['timestamp'] * 1000).astype('datetime64[ns]')
+        min_1_price_ema = pd.Series(mid_price).ewm(halflife='1 minute', times=times).mean()
+        raw_df[FeaturesV1.MIN_1_PRICE_EMA] = min_1_price_ema - mid_price
         return raw_df
 
     def cols(self):
-        return [FeaturesV1.BOOK_PRESSURE, FeaturesV1.QTY_IMBALANCE, FeaturesV1.BOOK_PRESSURE_CHANGE_1_ROW]
+        return [FeaturesV1.BOOK_PRESSURE, FeaturesV1.QTY_IMBALANCE, FeaturesV1.BOOK_PRESSURE_CHANGE_1_ROW,
+                FeaturesV1.DEEP_BOOK_MID_DIFF, FeaturesV1.MIN_1_PRICE_EMA]
 
     def valid_range(self):
         return 1, None
 
 
 class TargetsV1(TargetExtractor):
+    # using the 5 rows ahead weighted mid as a target since it's not too hard to get
+    # next would add a min latency filter to the target too
+    # would also break into bid and ask trade sides using real tradable prices against weighted mid
+    # at some time or rows offset
     WEIGHTED_MID_DIFF_5_ROWS = "weighted_mid_diff_5_rows"
     OFFSET = 5
 
@@ -187,10 +216,27 @@ class Subsampler(abc.ABC):
 
 
 class SubsamplerV1(Subsampler):
-
+    # subsample to just thelast rows at a timestamp and drop any intermediate states
+    # could also subsample assuming a queueing latency to not be overly optimistic about behavior during busy periods
     def filter(self, df):
         timediff = df['timestamp'].diff(-1)
         return df.iloc[timediff.values != 0]
+
+
+def prepare_features_and_target(df, feature_extractor, target_extractor):
+    target = df[target_extractor.cols()].values.squeeze(axis=1)
+    features = df[feature_extractor.cols()].values
+    valid_rows = np.isfinite(target) & np.all(np.isfinite(features), axis=1)
+    target = target[valid_rows]
+    features = features[valid_rows]
+    features = NormalScaler().scale(features)
+    return features, target
+
+
+def print_error(target, yhat):
+    print(((target - target.mean()) ** 2).sum(), target.std())
+    error = target - yhat
+    print((error ** 2).sum(), error.std())
 
 
 def main():
@@ -218,7 +264,7 @@ def main():
 
     train_df = pd.concat(train_dfs)
     test_df = pd.concat(test_dfs)
-    regression = LassoRegressor(0.01, 1000, 1)
+    regression = LassoRegressor(0.01, 1000, 10)
 
     target_range = targetExtractor.valid_range()
     feature_range = featureExtractor.valid_range()
@@ -227,36 +273,22 @@ def main():
     start_range = max(starts) if len(starts) > 0 else None
     end_range = min(ends) if len(ends) > 0 else None
     train_df = train_df.iloc[start_range:end_range]
-    target = train_df[targetExtractor.cols()].values.squeeze(axis=1)
-    features = train_df[featureExtractor.cols()].values
-    valid_rows = np.isfinite(target) & np.all(np.isfinite(features), axis=1)
-    target = target[valid_rows]
-    features = features[valid_rows]
-
-    features = NormalScaler().scale(features)
-    model = regression.fit(features, target)
-    yhat = model.predict(features)
-    print(((target - target.mean()) ** 2).sum(), target.std())
-    error = target - yhat
-    print((error ** 2).sum(), error.std())
-
-    # print(df.iloc[1000:1010])
-    print('here')
+    train_features, train_target = prepare_features_and_target(train_df, featureExtractor, targetExtractor)
+    test_features, test_target = prepare_features_and_target(test_df, featureExtractor, targetExtractor)
+    # features, target = prepare_features_and_target(train_df, featureExtractor, targetExtractor)
+    model = regression.fit(train_features, train_target)
+    yhat_train = model.predict(train_features)
+    print_error(train_target, yhat_train)
+    yhat_test = model.predict(test_features)
+    print_error(test_target, yhat_test)
     print(model.weights)
-
-    # plt.scatter(features, Y_test, color='blue', label='Actual Data')
-    # plt.plot(X_test, Y_pred, color='orange', label='Lasso Regression Line')
-    # plt.title('Salary vs Experience (Lasso Regression)')
-    # plt.xlabel('Years of Experience (Standardized)')
-    # plt.ylabel('Salary')
-    # plt.legend()
-    # plt.show()
 
 
 def prep_date(date, featureExtractor, input_dir, targetExtractor, subsampler):
     df = get_date_df(date, input_dir)
     if df is not None:
         df = subsampler.filter(df)
+        df = df.reset_index(drop=True)
         df = featureExtractor.extract(df)
         df = targetExtractor.extract(df)
     return df
